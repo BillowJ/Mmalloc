@@ -76,7 +76,7 @@ size_t InitMap(void* ptr){
             }
             cur -> size = curSize;
             // size_t offset = sizeof(block_info) + curSize;
-            cur -> next = num == (InitNum-1) ? nullptr : (block_info*)(cur + offset);
+            cur -> next = num == (InitNum-1) ? nullptr : (block_info*)(ptr + (offset + allSize));
             allSize += offset;
             cur = (block_info*)(ptr + allSize);
         }
