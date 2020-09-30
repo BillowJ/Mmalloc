@@ -4,6 +4,7 @@
 #include <utility>
 #include <functional>
 #include <map>
+#include <unordered_map>
 
 
 using namespace global;
@@ -34,18 +35,10 @@ __thread block_info *bin_256   = nullptr;
 __thread block_info *bin_512   = nullptr;
 */
 
-std::map<size_t, block_info*> func(){
-    std::map<size_t, block_info*> res = {
-
-    };
-    return res;
-}
-
-thread_local std::map<size_t, block_info*> bins;
-
-__thread bool hasMapInit = false;
+thread_local std::unordered_map<size_t, block_info*> bins;
 
 void *heap_used_memory_end = nullptr;
+__thread bool hasMapInit = false;
 __thread void *thread_unused_heap_start = nullptr;
 __thread void *thread_heap_end = nullptr;
 
@@ -60,13 +53,15 @@ size_t InitMap(void* ptr){
     size_t curSize = 8;
 
     if(!hasMapInit){
-        
+
         size_t cur_ = 8;
         for(int idx = 0; idx < ListSize; idx++){
-            bins.insert(std::make_pair(cur_, nullptr));
-            cur_ = cur_ << 1;
+            // bins.insert(std::make_pair(cur_, nullptr));
+            bins[cur_] = nullptr;
+            cur_ <<= 1;
         }
-        
+        hasMapInit = true;
+
     }
 
     for(int idx = 0; idx < ListSize; idx++){
@@ -81,7 +76,7 @@ size_t InitMap(void* ptr){
             }
             cur -> size = curSize;
             // size_t offset = sizeof(block_info) + curSize;
-            cur -> next = num == 2 ? NULL : (block_info*)(ptr + offset);
+            cur -> next = num == (InitNum-1) ? nullptr : (block_info*)(cur + offset);
             allSize += offset;
             cur = (block_info*)(ptr + allSize);
         }
@@ -133,6 +128,7 @@ size_t InitGlobalList(void* ptr){
    return allSize;
 }
 */
+
 /* 空闲链表中搜索最优的内存 */
 void* findBestBlockFromBinA(size_t size)
 {
@@ -528,10 +524,6 @@ void * mmap_new_memory(size_t size)
 
     ret = memcpy(ret, &b, sizeof(block_info));
     ret = ((char*)ret + sizeof(block_info));
-
-    // update stats variables.
-    pthread_mutex_lock(&stats_mutex);
-    pthread_mutex_unlock(&stats_mutex);
 
     return ret;
 }
