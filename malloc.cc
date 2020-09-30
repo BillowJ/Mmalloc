@@ -1,9 +1,236 @@
 #include "malloc.h"
 #include <assert.h>
 #include <iostream>
-using namespace tcmalloc;
-// ..
+#include <utility>
+#include <functional>
+#include <map>
 
+
+using namespace global;
+// ..
+namespace global{
+
+typedef struct block_info
+{
+   int size;
+   struct block_info *next;
+   
+}block_info;
+
+
+
+// bin_a仅用于小内存块的空余内存块存储
+// bin_large用于大块内存的分配
+  static block_info *bin_a     = nullptr;
+__thread block_info *bin_large = nullptr;
+
+/*
+__thread block_info *bin_8     = nullptr;
+__thread block_info *bin_16    = nullptr;
+__thread block_info *bin_32    = nullptr;
+__thread block_info *bin_64    = nullptr;
+__thread block_info *bin_128   = nullptr;
+__thread block_info *bin_256   = nullptr;
+__thread block_info *bin_512   = nullptr;
+*/
+
+std::map<size_t, block_info*> func(){
+    std::map<size_t, block_info*> res = {
+
+    };
+    return res;
+}
+
+thread_local std::map<size_t, block_info*> bins;
+
+__thread bool hasMapInit = false;
+
+void *heap_used_memory_end = nullptr;
+__thread void *thread_unused_heap_start = nullptr;
+__thread void *thread_heap_end = nullptr;
+
+
+block_info* InitMapHelper(size_t size){
+    return bins[size];
+}
+
+// TODO 
+size_t InitMap(void* ptr){
+    size_t allSize = 0;
+    size_t curSize = 8;
+
+    if(!hasMapInit){
+        
+        size_t cur_ = 8;
+        for(int idx = 0; idx < ListSize; idx++){
+            bins.insert(std::make_pair(cur_, nullptr));
+            cur_ = cur_ << 1;
+        }
+        
+    }
+
+    for(int idx = 0; idx < ListSize; idx++){
+        block_info* cur = InitMapHelper(curSize);
+        size_t offset = sizeof(block_info) + curSize;
+
+        for(int num = 0; num < InitNum; num++){
+            if (cur == nullptr)
+            {
+                cur = (block_info*)(ptr + allSize);
+                bins[curSize] = cur;
+            }
+            cur -> size = curSize;
+            // size_t offset = sizeof(block_info) + curSize;
+            cur -> next = num == 2 ? NULL : (block_info*)(ptr + offset);
+            allSize += offset;
+            cur = (block_info*)(ptr + allSize);
+        }
+        curSize <<= 1;
+    }
+    return allSize;
+}
+
+/*
+  Aligns pointer to 8 byte address.
+  params : pointer to align.
+  returns: a pointer (aligned to 8 bytes)
+ */
+void *align8(void *x)
+{
+    unsigned long p = (unsigned long)x;
+    p = (((p - 1) >> 3) << 3) + 8;
+    // p = (((p-1) & ~0x7)) + 8;
+    return (void *)p;
+}
+
+/*
+size_t InitGlobalList(void* ptr){
+   size_t allSize = 0;
+   size_t curSize = 8;
+   // 初始化除了bin_large 和 bin_a 的其余链表
+   for(int idx = 0; idx < ListSize; idx++){
+      // 获取对应的链表
+      block_info** curBinPtr = InitListHelper(curSize);
+      block_info* cur = *curBinPtr; 
+      size_t offset = sizeof(block_info) + curSize;
+      // 预先分配三块内存
+      for(int num = 0; num < 3; num++){
+         if (cur == nullptr)
+         {
+            cur = (block_info*)(ptr + allSize);
+            *curBinPtr = cur;
+         }
+
+         cur -> size = curSize;
+         // size_t offset = sizeof(block_info) + curSize;
+         cur -> next = num == 2 ? NULL : (block_info*)(ptr + offset);
+         allSize += offset;
+         cur = (block_info*)(ptr + allSize);
+      }
+      // 8 -> 16 -> 32 -> 64 -> 128 -> ..
+      curSize <<= 1;
+   }
+   return allSize;
+}
+*/
+/* 空闲链表中搜索最优的内存 */
+void* findBestBlockFromBinA(size_t size)
+{
+    block_info* ptr = bin_a;
+    block_info* bestPtr = nullptr;
+    int minFitSize = INT_MAX;
+    void* ret = nullptr;
+    while(ptr != nullptr){
+        if(ptr -> size > size && ptr -> size < minFitSize){
+            bestPtr = ptr;
+            minFitSize = ptr -> size;
+        }
+        ptr = ptr -> next;
+    }
+    if(bestPtr != nullptr){
+        
+        // 是bin_a的头部内存块
+        if(bestPtr == bin_a){
+            bin_a = bin_a -> next;
+            bestPtr -> next = nullptr;
+            ret = reinterpret_cast<void*>(bestPtr);
+        }
+        // 不需要更新bin_a的头
+        else{
+            ptr = bin_a;
+            while(ptr != nullptr && ptr -> next != bestPtr){
+                ptr = ptr -> next;
+            }
+            if (ptr != nullptr)
+            {
+                ptr -> next = bestPtr -> next;
+            }
+            bestPtr -> next = nullptr;
+            ret = reinterpret_cast<void*>(bestPtr);
+            
+        }
+    }
+
+    return ret;
+}
+
+/*
+  Finds best fitting block from large memory bin.
+*/
+void * find_best_fit_from_bin_large(size_t size)
+{
+    block_info *b = bin_large;
+    block_info *best_fit = NULL;
+    int min_fit_size = INT_MAX;
+    void *ret = NULL;
+
+    while(b != NULL)
+    {
+         if(b->size >= size && b->size < min_fit_size)
+         {
+            best_fit = b;
+            min_fit_size = b->size;
+         }
+         b = b->next;
+    }
+
+    /*If best fit found, update list*/
+    if(NULL != best_fit)
+    {
+        // if best_fit is first block.
+        if (best_fit == bin_large)
+        {
+           bin_large = bin_large->next;
+           best_fit->next = NULL;
+           ret = (void *)((void *)best_fit + sizeof(block_info));
+        }
+        else
+        {
+          b = bin_large;
+          while(b != NULL && b->next != best_fit)
+          {
+            b = b->next;
+          }
+          if(b != NULL)
+          {
+             b->next = best_fit->next;
+          }
+          best_fit->next = NULL;
+          ret = (void *)((void *)best_fit + sizeof(block_info));
+        }
+    }
+
+    return ret;
+}
+
+void* findBestFitFromLarge(size_t size)
+{
+    return find_best_fit_from_bin_large(size);
+}
+
+namespace tcmalloc
+{
+    
 // 将threadCache里面的链表全部清空,并加入到全局的空闲链表中
 // FIXME : 线程结束后调用会出错
 void threadCache::cleanUp(){
@@ -77,7 +304,7 @@ threadCache* threadCache::createCache(){
                 return NULL;
             }
             // 预先初始化一些链表以供使用.
-            size_t ret = InitGlobalList(heap_used_memory_end);
+            size_t ret = InitMap(heap_used_memory_end);
             heap_used_memory_end = heap_used_memory_end + ret;
             if(heap_used_memory_end == (void*) -1)
             {
@@ -131,50 +358,12 @@ int threadCache::getTheListIndex(size_t size)
     return -1;
 }
 
-/* 空闲链表中搜索最优的内存 */
-void* findBestBlockFromBinA(size_t size)
-{
-    block_info* ptr = bin_a;
-    block_info* bestPtr = nullptr;
-    int minFitSize = INT_MAX;
-    void* ret = nullptr;
-    while(ptr != nullptr){
-        if(ptr -> size > size && ptr -> size < minFitSize){
-            bestPtr = ptr;
-            minFitSize = ptr -> size;
-        }
-        ptr = ptr -> next;
-    }
-    if(bestPtr != nullptr){
-        
-        // 是bin_a的头部内存块
-        if(bestPtr == bin_a){
-            bin_a = bin_a -> next;
-            bestPtr -> next = nullptr;
-            ret = reinterpret_cast<void*>(bestPtr);
-        }
-        // 不需要更新bin_a的头
-        else{
-            ptr = bin_a;
-            while(ptr != nullptr && ptr -> next != bestPtr){
-                ptr = ptr -> next;
-            }
-            if (ptr != nullptr)
-            {
-                ptr -> next = bestPtr -> next;
-            }
-            bestPtr -> next = nullptr;
-            ret = reinterpret_cast<void*>(bestPtr);
-            
-        }
-    }
 
-    return ret;
-}
 
 /* 三种申请途径 */
 // 从已经初始化的内存申请
-block_info* threadCache::FromInitList(size_t size)
+/*
+block_info* threadCache::FromInitList1(size_t size)
 {
     assert(size <= 512);
     size_t alignSize = 8;
@@ -193,6 +382,17 @@ block_info* threadCache::FromInitList(size_t size)
       default  : return bin_large;
     }
     return nullptr;
+}
+*/
+
+// 
+std::pair<size_t, block_info*> threadCache::FromInitList(size_t size) {
+    assert(size <= 512);
+    size_t alignSize = 8;
+    while(!(alignSize / size)){
+        alignSize <<= 1;
+    }
+    return std::make_pair(alignSize, bins[alignSize]);
 }
 
 // 从全局空闲链表申请内存
@@ -266,13 +466,16 @@ void* threadCache::allocate(size_t size){
      */
     else{
         // TODO FromInitList
-        block_info* curList = FromInitList(size);
+        std::pair<size_t, block_info*> curListP = FromInitList(size);
+        block_info* curList = curListP.second;
+        size_t sz = curListP.first;
         if(curList != nullptr){
             block_info* p = curList;
             curList = p -> next;
             p -> next = nullptr;
-            block_info** binPtr = InitListHelper(p -> size);
-            *binPtr = curList;
+            // block_info** binPtr = InitListHelper(p -> size);
+            // *binPtr = curList;
+            bins[sz] = curList;
 
             ret = reinterpret_cast<void*>(p);
         }
@@ -296,208 +499,7 @@ void* threadCache::allocate(size_t size){
 }
 
 
-/*
-  Aligns pointer to 8 byte address.
-  params : pointer to align.
-  returns: a pointer (aligned to 8 bytes)
- */
-void *align8(void *x)
-{
-    unsigned long p = (unsigned long)x;
-    p = (((p - 1) >> 3) << 3) + 8;
-    // p = (((p-1) & ~0x7)) + 8;
-    return (void *)p;
-}
 
-
-/*
- *  returns the pointer to elated bin based on the size.
- *  params: size of bin.
- *  returns: pointer to bin corresponding size.
- */
-block_info** get_bin(size_t size)
-{
-    switch(size)
-    {
-      case 8   : return &bin_8;
-      case 16  : return &bin_16;
-      case 32  : return &bin_32;
-      case 64  : return &bin_64;
-      case 128 : return &bin_128;
-      case 256 : return &bin_256;
-      case 512 : return &bin_512;
-      default  : return &bin_large;
-    }
-}
-
-
-
-
-
-/*
- *  Creates a memory block from unused heap.
- *  params: requested memory size in bytes.
- *  returns: pointer to allocated memory chunk. NULL on failure.
- */
-void * block_from_unused_heap(size_t size)
-{
-    /*If thread heap is not initialized or if available free size is less
-      than the block for requested size.*/
-    // header size is 16bytes 
-    // finalsize = size + 16bytes  
-    if(NULL == thread_unused_heap_start ||
-       ((char*)thread_heap_end - (char*)thread_unused_heap_start) <
-           (size + sizeof(block_info)))
-    {
-
-        /*If heap of process is not initialized or available free size of general
-          heap is less than the block for requested size.*/
-        if(NULL == heap_used_memory_end ||
-            ((char*)sbrk(0) - (char*)heap_used_memory_end) < (size + sizeof(block_info)))
-        {
-            /*If heap is not initialized.*/
-            if(NULL == heap_used_memory_end)
-            {
-                heap_used_memory_end = sbrk(0);
-                if(heap_used_memory_end == (void*) -1)
-                {
-                    errno = ENOMEM;
-                    perror("\n sbrk(0) failed.");
-                    return NULL;
-                }
-            }
-
-            align8(heap_used_memory_end);
-        }
-
-        // extend heap, return NULL on failure.
-        // extend 400kb by sbrk syscall
-        if(sbrk(sysconf(_SC_PAGESIZE) * 100) == (void *) -1)
-        {
-            errno = ENOMEM;
-            perror("\n sbrk failed to extend heap.");
-            return NULL;
-        }
-
-        /*If there is smaller chunk remaining, add to free list of a bin.
-          to minimize the wastage of memory.*/
-        /*if(NULL != thread_unused_heap_start)
-        {
-            // TODO: add_chunk_to_bin(); possible optimization.
-        }*/
-
-        /*create fresh heap of 1 page size. for a thread.*/
-        thread_unused_heap_start = heap_used_memory_end;
-        thread_heap_end = heap_used_memory_end + (sysconf(_SC_PAGESIZE));
-        heap_used_memory_end =  thread_heap_end;
-    }
-
-    block_info b;
-    b.size = size;
-    b.next = NULL;
-
-    memcpy(thread_unused_heap_start, &b, sizeof(block_info));
-    thread_unused_heap_start = thread_unused_heap_start + (sizeof(block_info) + size);
-
-    // update stats variables.
-    pthread_mutex_lock(&stats_mutex);
-    total_number_of_blocks++;
-    total_arena_size_allocated += size;
-    pthread_mutex_unlock(&stats_mutex);
-
-    return (thread_unused_heap_start - size);
-}
-
-
-
-
-/*
- * Allocate memory from heap area. For memory request of sizes < 512, chunks are
- * allocated from heap.
- * params : size.
- * returns: pointer to allocated area.
- */
-void *heap_allocate(size_t size)
-{
-   block_info **bin = get_bin(size);
-   void * ret = NULL;
-   /* reuse memory block from heap bins if available*/
-   if(NULL != *bin)
-   {
-       block_info *p = *bin;
-       *bin =  p->next;
-       p->next = NULL;
-
-       pthread_mutex_lock(&stats_mutex);
-       total_free_blocks--;
-       pthread_mutex_unlock(&stats_mutex);
-       ret = (void *)((char*)p + sizeof(block_info));
-   }
-   else  //request new memory or slice out remaining unused memory.
-   {
-         pthread_mutex_lock(&global_heap_mutex);
-         ret =  block_from_unused_heap(size);
-         pthread_mutex_unlock(&global_heap_mutex);
-   }
-
-   return ret;
-}
-
-
-
-/*
-  Finds best fitting block from large memory bin.
-*/
-void * find_best_fit_from_bin_large(size_t size)
-{
-    block_info *b = bin_large;
-    block_info *best_fit = NULL;
-    int min_fit_size = INT_MAX;
-    void *ret = NULL;
-
-    while(b != NULL)
-    {
-         if(b->size >= size && b->size < min_fit_size)
-         {
-            best_fit = b;
-            min_fit_size = b->size;
-         }
-         b = b->next;
-    }
-
-    /*If best fit found, update list*/
-    if(NULL != best_fit)
-    {
-        // if best_fit is first block.
-        if (best_fit == bin_large)
-        {
-           bin_large = bin_large->next;
-           best_fit->next = NULL;
-           ret = (void *)((void *)best_fit + sizeof(block_info));
-        }
-        else
-        {
-          b = bin_large;
-          while(b != NULL && b->next != best_fit)
-          {
-            b = b->next;
-          }
-          if(b != NULL)
-          {
-             b->next = best_fit->next;
-          }
-          best_fit->next = NULL;
-          ret = (void *)((void *)best_fit + sizeof(block_info));
-        }
-    }
-
-    return ret;
-}
-
-void* findBestFitFromLarge(size_t size)
-{
-    return find_best_fit_from_bin_large(size);
-}
 
 
 /*
@@ -529,7 +531,6 @@ void * mmap_new_memory(size_t size)
 
     // update stats variables.
     pthread_mutex_lock(&stats_mutex);
-    total_mmap_size_allocated += size;
     pthread_mutex_unlock(&stats_mutex);
 
     return ret;
@@ -588,7 +589,6 @@ void* Mmalloc(size_t size)
  * list.
  * params: address to pointer to be freed.
  * returns: NONE.
- * 
  */
 void Mfree(void *p)
 {
@@ -642,3 +642,7 @@ void Mfree(void *p)
         }
     }
 }
+
+} // namespace tcmalloc
+
+} // namespace global

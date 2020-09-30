@@ -5,17 +5,7 @@
 
 #include "malloc.h"
 
-/*
-void* threadFunc(void* arg){
-  void* p1 = Mmalloc(18);
-  void* p2 = Mmalloc(513);
-  printf("thread id: %lu", pthread_self());
-  printf("thread malloc end \n");
-  Mfree(p1);
-  Mfree(p2);
-  return nullptr;
-}
-*/
+using namespace global;
 
 int main(int argc, char **argv)
 {
@@ -23,16 +13,16 @@ int main(int argc, char **argv)
   size_t size = 10;
   size_t size0 = 100;
   size_t size1 = 1000;
-  void *mem = Mmalloc(size);
-  void *mem0 = Mmalloc(size0);
-  void *mem1 = Mmalloc(size1);
+  void *mem = tcmalloc::Mmalloc(size);
+  void *mem0 = tcmalloc::Mmalloc(size0);
+  void *mem1 = tcmalloc::Mmalloc(size1);
   printf("before free the memory:\n");
   printf("Successfully malloc'd %zu bytes at addr %p\n", size, mem);
   printf("Successfully malloc'd %zu bytes at addr %p\n", size0, mem0);
   printf("Successfully malloc'd %zu bytes at addr %p\n", size1, mem1);
   sleep(1);
-  Mfree(mem);
-  Mfree(mem0);
-  Mfree(mem1);
+  tcmalloc::Mfree(mem);
+  tcmalloc::Mfree(mem0);
+  tcmalloc::Mfree(mem1);
   return 0;
 }
